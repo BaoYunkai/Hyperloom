@@ -114,10 +114,15 @@ def forge_loop_prompts(monkeypatch):
 # profiler, and the fused arm to be one call to the authored entry point; the JSON
 # object gained `eager_kernels`/`eager_matches_trace` and the rule that reads them;
 # the remaining steps are the same text renumbered 6-8.
+# The monokernel backend added `mono` and moved assembly alone: the task-suite gate
+# paragraph the two backends share now names `allclose: True` from a driver that
+# judges each output itself as the other form of the pre-filter, and says "clears
+# the driver" where it said "clears SNR" (diffed line by line: those two sentences,
+# the first rewrapped onto two lines, and nothing else).
 _SHA256_FORGE_LOOP: dict[str, str] = {
     "ave": "09acfdaddef501d7fd34308dc5e44b5f202695a6fc257846e80843946f8bf27a",
     "aiter": "290f5b86300a62c682789551515fd000dfe395ad2abbea5a68a5e683588fec90",
-    "assembly": "67ce0c680f6b603d7c656feb1f1cc1f5eaf1bf4f6afc5d9f368b0361dd4b1492",
+    "assembly": "cfc8a0db6147d8f2e8ebb4ff7c9e433f5a50bf05252aba1624b53dd26939f753",
     "ck": "d5a880ff37bdd3a1d04d33227aa1e2a7840f7cdee9559043ce14cf40e1ca6ebd",
     "flydsl": "659dadd861489506bd75bbc4ec9e511f050f6ee03711238fd4c8def1064e1519",
     # The group-axis rule moved fusion alone: harness contract step 4 now forbids
@@ -127,6 +132,7 @@ _SHA256_FORGE_LOOP: dict[str, str] = {
     "gluon": "8a8a0feea8cf0d0ed9030b2557bd056a80be2abc3d9e180ec2cf7819eaea91f3",
     "hip": "5559572e047b3c4b872cc7027acb81b2920b6815845706d0b73bdef08b1ac502",
     "hipblaslt": "90fb6e81023fd66295411408f4993453d76330f5a27e5ea58873c38edad99be3",
+    "mono": "8674a3aff39ceeb409316eefbcbb7c7db6c378af18900437025061b8f93d9860",
     "triton": "aebb854b4e134020cd853ef5c20e38195f2defb5444c27f98bd61c60fddaa056",
 }
 
