@@ -22,6 +22,17 @@ from hyperloom.orchestrator.prompts.specialist_prompt_builder import (
 )
 
 
+_ADD_NORM_FINDING = {
+    "kind": "add_norm",
+    "operation": "Unfused Add + RMSNorm in `DecoderLayer`",
+    "projected_e2e_pct": 2.4,
+    "members": [
+        {"kernel_names": ["add_kernel"], "kernel_launcher_path": "modeling.py(88): forward"},
+        {"kernel_names": ["rmsnorm_kernel"], "kernel_launcher_path": ""},
+    ],
+}
+
+
 def _make_coord(tmp_path: Path, *, state: SharedState) -> Coordinator:
     c = Coordinator.__new__(Coordinator)
     c.session_dir = tmp_path
@@ -69,6 +80,7 @@ async def test_warm_specialist_params_injects_roofline_evidence(tmp_path):
                     for i in range(2, 11)
                 ],
             ],
+            "fusion_findings": [_ADD_NORM_FINDING],
         },
     )
 
@@ -82,6 +94,7 @@ async def test_warm_specialist_params_injects_roofline_evidence(tmp_path):
     assert ev["roofline_snapshot_id"] == 3
     assert len(ev["hot_kernels_top15"]) == 8
     assert ev["hot_kernels_top15"][0]["kernel_id"] == "k1"
+    assert ev["fusion_findings"] == [_ADD_NORM_FINDING]
     assert ev["executive_summary"]["compute_pct"] == pytest.approx(32.1, rel=0.01)
     assert ev["executive_summary"]["idle_pct"] == pytest.approx(17.5, rel=0.01)
     assert ev["executive_summary"]["comm_pct"] == pytest.approx(41.8, rel=0.01)
@@ -204,6 +217,14 @@ def test_section_renders_executive_summary_and_hot_kernels():
     assert "MoE_fused" in text
     assert "k1" in text and "8.40%" in text
     assert "/sd/.../analysis.md" in text
+
+
+def test_section_renders_fusion_findings_only_when_tracelens_reported_some():
+    section = _section_roofline_evidence(_make_inp({"fusion_findings": [_ADD_NORM_FINDING]}))
+    assert "| add_norm | Unfused Add + RMSNorm in `DecoderLayer` | 2.40% | modeling.py(88): forward |" in section
+
+    section = _section_roofline_evidence(_make_inp({"fusion_findings": [], "roofline_snapshot_id": 1}))
+    assert not any("Kernel fusion opportunities" in row for row in section)
 
 
 def test_section_renders_none_when_evidence_empty():

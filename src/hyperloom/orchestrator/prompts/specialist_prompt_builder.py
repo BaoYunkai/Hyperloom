@@ -819,6 +819,35 @@ _ANALYSIS_MD_READ_GUIDE = (
 )
 
 
+def _fusion_findings_rows(findings: Any) -> list[str]:
+    """Render TraceLens' unfused kernel runs; empty when the report has none."""
+    if not findings:
+        return []
+    rows = [
+        "**Kernel fusion opportunities (TraceLens, largest projected saving first):**",
+        "",
+        "| pattern | operation | projected E2E saving | launcher |",
+        "|---|---|---:|---|",
+    ]
+    for finding in findings:
+        pct = finding.get("projected_e2e_pct")
+        pct_str = f"{float(pct):.2f}%" if isinstance(pct, (int, float)) else "—"
+        launchers = sorted(
+            {m["kernel_launcher_path"] for m in finding.get("members") or [] if m["kernel_launcher_path"]}
+        )
+        rows.append(
+            f"| {finding.get('kind') or '—'} | {finding.get('operation') or ''} | {pct_str} | {'; '.join(launchers)} |"
+        )
+    rows += [
+        "",
+        "A pattern here whose fused path the framework already ships (attention backend, fused add/norm/quant, "
+        "RoPE+KV store, activation-and-mul, compiler fusion passes) is a server-arg or env variant to propose; "
+        "a pattern still listed with that path enabled needs a new fused kernel.",
+        "",
+    ]
+    return rows
+
+
 def _section_roofline_evidence(inp: SpecialistPromptInputs) -> list[str]:
     """Render the ROOFLINE EVIDENCE section from ``inp.roofline_evidence``;
     empty evidence renders a heading + ``(none)`` placeholder.
@@ -884,6 +913,8 @@ def _section_roofline_evidence(inp: SpecialistPromptInputs) -> list[str]:
     if directive:
         rows.extend(directive)
         rows.append("")
+
+    rows.extend(_fusion_findings_rows(ev.get("fusion_findings")))
 
     analysis_path = ev.get("analysis_md_path")
     if analysis_path:

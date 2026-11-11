@@ -567,6 +567,42 @@ class TestForgeGemmHelperCoverage:
         state.last_profile_trace = str(empty_dir)
         assert forge_fusion_run._resolve_fusion_decode_trace(state) == ""
 
+    _QK_GEMM = "Cijk_Alik_Bljk_B_BS_BH_Bias_HA_S_SAV_UserArgs_MT256x128x32_MI16x16x1_SN_LDSB1_AFC1_AG0"
+    _SOFTMAX = "void at::native::(anonymous namespace)::cunn_SoftMaxForwardReg<c10::BFloat16, float, 8>(...)"
+
+    @staticmethod
+    def _kernel_trace(path: Path, names: list[str]) -> str:
+        events = [{"cat": "kernel", "name": name, "ts": i, "dur": 1.0} for i, name in enumerate(names)]
+        path.write_text(json.dumps({"traceEvents": events}), encoding="utf-8")
+        return str(path)
+
+    @staticmethod
+    def _attention_finding(*symbols: str) -> dict:
+        members = [{"kernel_names": [s], "kernel_launcher_path": ""} for s in symbols]
+        return {"kind": "attention", "operation": "Unfused Attention", "projected_e2e_pct": 13.5, "members": members}
+
+    def test_fusion_anchor_resolves_the_truncated_middle_kernel_of_the_run(self, tmp_path):
+        trace = self._kernel_trace(tmp_path / "decode.trace.json", [self._QK_GEMM, self._SOFTMAX, self._QK_GEMM])
+        finding = self._attention_finding(self._QK_GEMM[:75] + "...", self._SOFTMAX[:75] + "...", self._QK_GEMM)
+        state = SharedState(last_trace_analyze={"fusion_findings": [finding]})
+
+        assert forge_fusion_run._fusion_anchor(state, trace) == self._SOFTMAX
+
+    def test_fusion_anchor_skips_a_prefix_that_names_several_trace_kernels(self, tmp_path):
+        softmax_fp32 = self._SOFTMAX.replace("BFloat16", "BFloat16x")
+        trace = self._kernel_trace(tmp_path / "decode.trace.json", [self._QK_GEMM, self._SOFTMAX, softmax_fp32])
+        finding = self._attention_finding(self._QK_GEMM[:75] + "...", self._SOFTMAX[:70] + "...")
+        state = SharedState(last_trace_analyze={"fusion_findings": [finding]})
+
+        assert forge_fusion_run._fusion_anchor(state, trace) == self._QK_GEMM
+
+    def test_fusion_anchor_is_unseeded_when_no_finding_names_a_trace_kernel(self, tmp_path):
+        trace = self._kernel_trace(tmp_path / "decode.trace.json", [self._QK_GEMM])
+        unmatched = SharedState(last_trace_analyze={"fusion_findings": [self._attention_finding("rmsnorm_kernel...")]})
+
+        assert forge_fusion_run._fusion_anchor(unmatched, trace) == ""
+        assert forge_fusion_run._fusion_anchor(SharedState(last_trace_analyze={}), trace) == ""
+
     def test_forge_fusion_available_probes_the_fusion_subpackage(self, monkeypatch):
         probed: list[str] = []
 
@@ -1045,15 +1081,16 @@ class TestForgeGemmHelperCoverage:
 
         assert forge_lane_budget._forge_fusion_timeout_sec() == 7200
 
-    async def _fusion_input_payload(self, tmp_path, monkeypatch, *, max_minutes):
+    async def _fusion_input_payload(self, tmp_path, monkeypatch, *, max_minutes, trace_kernels=(), fusion_findings=()):
         """Run the fusion lane against a faked forge runner and return the payload it was handed."""
         trace_dir = tmp_path / "trace"
         trace_dir.mkdir()
-        (trace_dir / "decode.trace.json.gz").write_text("{}", encoding="utf-8")
+        trace = self._kernel_trace(trace_dir / "decode.trace.json", list(trace_kernels))
         state = SharedState(
             framework="sglang",
             model_path="/models/zaya",
-            last_profile_trace=str(trace_dir),
+            last_profile_trace=trace,
+            last_trace_analyze={"fusion_findings": list(fusion_findings)},
             max_minutes=max_minutes,
         )
         state.save(tmp_path)
@@ -1081,6 +1118,26 @@ class TestForgeGemmHelperCoverage:
 
         assert "max_recipes" not in payload
         assert payload["timeout"] == forge_lane_budget._forge_fusion_timeout_sec()
+
+    async def test_fusion_discovery_is_anchored_on_a_tracelens_finding_in_the_trace(self, tmp_path, monkeypatch):
+        payload = await self._fusion_input_payload(
+            tmp_path,
+            monkeypatch,
+            max_minutes=120,
+            trace_kernels=[self._QK_GEMM, self._SOFTMAX, self._QK_GEMM],
+            fusion_findings=[self._attention_finding(self._QK_GEMM, self._SOFTMAX[:75] + "...", self._QK_GEMM)],
+        )
+
+        assert payload["discover_mode"] == "anchored"
+        assert payload["fuse_kernel"] == self._SOFTMAX
+
+    async def test_fusion_discovery_is_unseeded_without_fusion_findings(self, tmp_path, monkeypatch):
+        payload = await self._fusion_input_payload(
+            tmp_path, monkeypatch, max_minutes=120, trace_kernels=[self._QK_GEMM, self._SOFTMAX]
+        )
+
+        assert payload["discover_mode"] == "llm"
+        assert payload["fuse_kernel"] == ""
 
     def test_forge_fusion_timeout_infinite_env_falls_back(self, monkeypatch):
         monkeypatch.setenv("FORGE_FUSION_TIMEOUT", "inf")

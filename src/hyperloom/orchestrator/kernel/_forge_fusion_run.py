@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Any, Mapping
 
 from hyperloom.common import codex_session
 from hyperloom_common.llm import llm_config
+from kernelforge.workflows.forge_fusion.anchor import collapse_whitespace
+from kernelforge.workflows.forge_fusion.discover import kernel_names_from_trace
 
 from . import forge_fusion
 from ..actions.executors._kernel_agent_tool import HandlerResult
@@ -72,6 +75,38 @@ def _resolve_fusion_decode_trace(state) -> str:
         reverse=True,
     )
     return str(captures[0]) if captures else ""
+
+
+def _fusion_anchor(state: Any, trace_path: str) -> str:
+    """The full trace name of the kernel forge-fuse anchors on, or ``""`` for unseeded discovery.
+
+    TraceLens' fusion findings are tried in their order; within one, members nearest the middle of the unfused run go
+    first so the anchor's neighbours on both sides belong to the run.
+    """
+    last_trace_analyze = getattr(state, "last_trace_analyze", None)
+    findings = last_trace_analyze.get("fusion_findings") if isinstance(last_trace_analyze, dict) else None
+    if not findings:
+        return ""
+    trace_names = {collapse_whitespace(name) for name in kernel_names_from_trace(trace_path, top_n=None)}
+    for finding in findings:
+        members = finding["members"]
+        middle = (len(members) - 1) / 2
+        for _, member in sorted(enumerate(members), key=lambda item: abs(item[0] - middle)):
+            for symbol in member["kernel_names"]:
+                name = _trace_kernel_name(symbol, trace_names)
+                if name:
+                    return name
+    return ""
+
+
+def _trace_kernel_name(symbol: str, trace_names: set[str]) -> str:
+    """The one trace kernel a TraceLens symbol names; TraceLens truncates long symbols to a prefix ending in ``...``."""
+    wanted = collapse_whitespace(symbol)
+    if wanted.endswith("..."):
+        hits = [name for name in trace_names if name.startswith(wanted[:-3])]
+    else:
+        hits = [wanted] if wanted in trace_names else []
+    return hits[0] if len(hits) == 1 else ""
 
 
 def _active_forge_fusion_env_flags(state: Any) -> dict[str, str]:
@@ -185,7 +220,8 @@ async def run_fusion_handler(payload: dict, *, session_dir: Path) -> HandlerResu
     which returns the fusion contract result. A KEPT fusion carries a source patch + env flags
     and ``requires_e2e_validation`` so the integrate gate confirms the
     end-to-end gain. Reuses the PRELUDE decode trace (no re-profiling); only
-    ``payload['task_id']`` is read, to name the workspace.
+    ``payload['task_id']`` is read, to name the workspace. Discovery is anchored on
+    the first TraceLens fusion finding that names a kernel in that trace, else unseeded.
     """
     from ..state.shared_state import SharedState
 
@@ -211,13 +247,15 @@ async def run_fusion_handler(payload: dict, *, session_dir: Path) -> HandlerResu
 
     workspace = session_dir / "runs" / "fusion" / str(payload.get("task_id") or "kernel_entry_fusion")
     workspace.mkdir(parents=True, exist_ok=True)
+    fuse_kernel = await asyncio.to_thread(_fusion_anchor, state, trace_path)
     result = await forge_fusion.run_forge_fusion(
         {
             "trace_path": trace_path,
             "model_path": model_path,
             "framework": framework,
             "output_dir": str(workspace),
-            "discover_mode": "llm",
+            "discover_mode": "anchored" if fuse_kernel else "llm",
+            "fuse_kernel": fuse_kernel,
             "agent_backend": agent_backend,
             "llm_model": llm_model,
             "agent_sandbox_mode": agent_sandbox_mode,
@@ -239,6 +277,7 @@ async def run_fusion_handler(payload: dict, *, session_dir: Path) -> HandlerResu
         "agent_backend": agent_backend,
         "llm_model": llm_model,
         "agent_sandbox_mode": agent_sandbox_mode,
+        "fusion_anchor": fuse_kernel,
         "source": "forge_fusion",
         **result,
     }

@@ -89,6 +89,16 @@ def test_build_cmd_forwards_session_serve_args(tmp_path):
     assert cmd[cmd.index("--max-model-len") + 1] == "13312"
 
 
+def test_build_cmd_forwards_the_anchor_kernel_only_when_one_was_resolved(tmp_path):
+    payload = _payload(tmp_path)
+    assert "--fuse-kernel" not in forge_fusion._build_cmd(payload)
+
+    payload.update({"discover_mode": "anchored", "fuse_kernel": "void softmax_kernel<bf16>(float*)"})
+    cmd = forge_fusion._build_cmd(payload)
+    assert cmd[cmd.index("--discover") + 1] == "anchored"
+    assert cmd[cmd.index("--fuse-kernel") + 1] == "void softmax_kernel<bf16>(float*)"
+
+
 def test_author_env_adds_stability_defaults(monkeypatch):
     for name in (
         "ANTHROPIC_BASE_URL",

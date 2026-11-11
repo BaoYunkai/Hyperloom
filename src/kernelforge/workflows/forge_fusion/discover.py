@@ -175,8 +175,8 @@ def hot_kernels_from_trace(
     return rows[:top_n]
 
 
-def kernel_names_from_trace(trace_path: str | Path, *, top_n: int = 40) -> list[str]:
-    """Distinct kernel names ranked by total duration, compute kernels included."""
+def kernel_names_from_trace(trace_path: str | Path, *, top_n: int | None = 40) -> list[str]:
+    """Distinct kernel names ranked by total duration, compute kernels included; ``top_n=None`` keeps them all."""
     totals: dict[str, float] = defaultdict(float)
     for event in _load_trace_events(trace_path):
         if event.get("cat") != "kernel":
